@@ -3,21 +3,33 @@
 #include <QFileInfo>
 #include <QFileDialog>
 #include <QMessageBox>
-#include <opencv2/core.hpp>
-#include <opencv2/imgproc.hpp>
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
     setWindowTitle("QRawImageViewer");
-    ui->pixelFormatComboBox->addItems(QStringList{"JPEG", "PNG", "BMP", "GRAY", "RGB888", "UYVY", "BG10", "RG10"});
+    ui->fileSizeLineEdit->setReadOnly(true);
+    ui->pixelFormatComboBox->addItems(QStringList{"BG10", "RG10", "YUV422", "RGB888", "GRAY", "JPEG", "PNG", "BMP"});
+    /* load config */
+    int ret = config.load("./viewer.ini");
+    if (ret != 0) {
+        config.setPath(".");
+    } else {
+        ui->widthLineEdit->setText(QString::number(config.getWidth()));
+        ui->heightLineEdit->setText(QString::number(config.getHeight()));
+        ui->pixelFormatComboBox->setCurrentIndex(config.getFormat());
+    }
+    connect(ui->pixelFormatComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [=](int index) {config.setFormat(index);});
     connect(ui->openBtn, &QPushButton::clicked, this, [=](){
-        QString filePath = QFileDialog::getOpenFileName(this, "select an image", ".");
+        QString filePath = QFileDialog::getOpenFileName(this, "select an image", config.getPath());
         if (filePath.isEmpty()) {
             return;
         }
         QFileInfo info(filePath);
+        config.setPath(info.absolutePath());
         ui->pathLineEdit->setText(info.absoluteFilePath());
     });
     connect(ui->decodeBtn, &QPushButton::clicked, this, &MainWindow::displayImage);
@@ -25,6 +37,7 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    config.save("./viewer.ini");
     delete ui;
 }
 
@@ -64,12 +77,15 @@ void MainWindow::displayImage()
     }
     h = heightText.toInt();
     w = widthText.toInt();
+    config.setWidth(w);
+    config.setHeight(h);
 
     loadImageFile(path, rawImg);
     if (rawImg.isEmpty()) {
         QMessageBox::warning(this, "Error", "failed to load image file.");
         return;
     }
+    ui->fileSizeLineEdit->setText(QString::number(rawImg.size()));
 
     switch (index) {
     case PixelFormat_GRAY: {
@@ -82,7 +98,7 @@ void MainWindow::displayImage()
         break;
     }
     case PixelFormat_RGB888: {
-        if (w*h*3 > rawImg.size()) {
+        if (h*w*3 > rawImg.size()) {
             QMessageBox::warning(this, "Error", "invalid height or width");
             return;
         }
@@ -90,30 +106,41 @@ void MainWindow::displayImage()
         ui->imageLabel->setPixmap(QPixmap::fromImage(img.scaled(ui->imageLabel->size())));
         break;
     }
-    case PixelFormat_UYVY: {
-        if (w*h*3/2 > rawImg.size()) {
+    case PixelFormat_YUV422: {
+        if (h*w*2 > rawImg.size()) {
             QMessageBox::warning(this, "Error", "invalid height or width");
             return;
         }
-        cv::Mat yuyv(h, w, CV_8UC1, (uchar*)rawImg.data());
-        cv::Mat rgb;
-        cv::cvtColor(yuyv, rgb, cv::COLOR_YUV2RGB_UYVY);
-        QImage img(rgb.data, w, h, QImage::Format_RGB888);
-        ui->imageLabel->setPixmap(QPixmap::fromImage(img.scaled(ui->imageLabel->size())));
+        cv::Mat yuv422(h, w*2, CV_8UC1, (uchar*)rawImg.data());
+        cv::cvtColor(yuv422, rgb, cv::COLOR_YUV2RGB_YUYV);
+        if (rgb.empty()) {
+            QImage img(rgb.data, w, h, QImage::Format_RGB888);
+            ui->imageLabel->setPixmap(QPixmap::fromImage(img.scaled(ui->imageLabel->size())));
+        }
         break;
     }
     case PixelFormat_BG10: {
-        cv::Mat bg10(h, w, CV_8UC1, (uchar*)rawImg.data());
-        cv::Mat rgb;
-        cv::cvtColor(bg10, rgb, cv::COLOR_BayerBG2RGB);
+        if (h*w*5/4 > rawImg.size()) {
+            QMessageBox::warning(this, "Error", "invalid height or width");
+            return;
+        }
+        cv::Mat raw10(h, w, CV_16SC1, (uchar*)rawImg.data());
+        cv::Mat raw8;
+        cv::convertScaleAbs(raw10, raw8, 0.25);
+        cv::cvtColor(raw10, rgb, cv::COLOR_BayerBGGR2RGB);
         QImage img(rgb.data, w, h, QImage::Format_RGB888);
         ui->imageLabel->setPixmap(QPixmap::fromImage(img.scaled(ui->imageLabel->size())));
         break;
     }
     case PixelFormat_RG10: {
-        cv::Mat rg10(h, w, CV_8UC1, (uchar*)rawImg.data());
-        cv::Mat rgb;
-        cv::cvtColor(rg10, rgb, cv::COLOR_BayerRG2RGB);
+        if (h*w*5/4 > rawImg.size()) {
+            QMessageBox::warning(this, "Error", "invalid height or width");
+            return;
+        }
+        cv::Mat raw10(h, w, CV_16SC1, (uchar*)rawImg.data());
+        cv::Mat raw8;
+        cv::convertScaleAbs(raw10, raw8, 0.25);
+        cv::cvtColor(raw8, rgb, cv::COLOR_BayerRGGB2RGB);
         QImage img(rgb.data, w, h, QImage::Format_RGB888);
         ui->imageLabel->setPixmap(QPixmap::fromImage(img.scaled(ui->imageLabel->size())));
         break;
